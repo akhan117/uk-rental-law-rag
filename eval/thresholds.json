@@ -1,0 +1,17 @@
+{
+  "_comment": "CI regression gates. retrieval_only runs on every push and is deterministic, so it is gated tightly against eval/baseline_retrieval.json. full runs a hosted LLM and inherits sampling noise (README variance note), so it is gated with tolerance: these are floors that catch a real regression, not targets.",
+  "retrieval_only": {
+    "recall": {"min": 0.75},
+    "oos_pre_generation": {"min_n": 13},
+    "must_answer": {"min": 1.0}
+  },
+  "full": {
+    "max_errors": 3,
+    "recall": {"min": 0.75},
+    "citation": {"min": 0.5},
+    "hallucination": {"max": 0.15},
+    "oos_abstention": {"min": 0.9},
+    "must_answer": {"min": 0.9},
+    "stale_law": {"min": 1.0}
+  }
+}

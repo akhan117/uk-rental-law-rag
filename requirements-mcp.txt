@@ -1,0 +1,3 @@
+-r requirements.txt
+# 1.x on purpose: mcp 2.x needs newer pydantic/starlette than fastapi==0.115.6 allows.
+mcp==1.12.4

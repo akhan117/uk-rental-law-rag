@@ -18,18 +18,11 @@ break retrieval.
 """
 from __future__ import annotations
 
-import json
-import os
 import re
 
 import httpx
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-MODEL = os.environ.get("RAG_MODEL", "qwen3:4b")
-# Same reasoning as generate.py: a timeout here silently drops the rewrite and
-# sends the raw question to retrieval, which is the behaviour this module exists
-# to avoid. On a slow machine that would fire exactly when it is needed most.
-OLLAMA_TIMEOUT = float(os.environ.get("RAG_TIMEOUT", "600"))
+import llm
 
 SYSTEM_PROMPT = """You rewrite questions about England residential landlord-tenant law into search \
 queries for a database of legislation and case law. You do NOT answer questions and you do NOT state \
@@ -94,30 +87,23 @@ MAX_QUERIES = 3
 MIN_QUERY_CHARS = 12
 
 
-def understand(question: str) -> dict:
+def understand(question: str, trace=None) -> dict:
     """Return {"legal_question": str, "search_queries": [str]}.
 
     Always returns something usable - on any failure the original question is
-    used as its own search query, which is exactly the previous behaviour.
+    used as its own search query, which is exactly the previous behaviour. The
+    same holds for the timeout (llm.py, RAG_TIMEOUT): one that trips silently
+    drops the rewrite, which on a slow machine fires exactly when it's needed.
     """
     fallback = {"legal_question": question, "search_queries": [question], "rewritten": False}
     try:
-        with httpx.Client(timeout=OLLAMA_TIMEOUT) as client:
-            resp = client.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={
-                    "model": MODEL,
-                    "system": SYSTEM_PROMPT,
-                    "prompt": f"Q: {question}",
-                    "stream": False,
-                    "think": False,
-                    "format": SCHEMA,
-                    "options": {"temperature": 0.0},
-                },
-            )
-            resp.raise_for_status()
-        parsed = json.loads(resp.json()["response"])
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError):
+        result = llm.complete_json(SYSTEM_PROMPT, f"Q: {question}", SCHEMA,
+                                   name="search_rewrite", temperature=0.0, max_tokens=300,
+                                   trace=trace, stage="rewrite")
+    except (httpx.HTTPError, llm.LLMError, KeyError, ValueError):
+        return fallback
+    parsed = result.parsed
+    if not parsed:
         return fallback
 
     queries = [

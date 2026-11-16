@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -28,9 +30,37 @@ class RetrievalFilters(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    question: str
+    # Bounded: on a public demo an unbounded question is an unbounded prompt,
+    # paid for out of a free-tier token quota.
+    question: str = Field(min_length=1, max_length=2000)
     facts: Facts | None = None
     filters: RetrievalFilters | None = None
+    # "rag": single-shot hybrid retrieval. "agent": the model plans retrieval
+    # with tools (backend/agent.py); the answer step is identical.
+    mode: Literal["rag", "agent"] = "rag"
+
+
+class AgentStep(BaseModel):
+    round: int
+    tool: str
+    arguments: dict
+    summary: str
+    latency_ms: int
+
+
+class ResponseMeta(BaseModel):
+    """What serving this answer cost. Also logged per request (telemetry.py)."""
+    request_id: str
+    mode: str
+    provider: str
+    model: str
+    latency_ms: int
+    stages_ms: dict[str, int] = Field(default_factory=dict)
+    llm_calls: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    tool_calls: int = 0
+    cached: bool = False
 
 
 class Source(BaseModel):
@@ -54,3 +84,6 @@ class QueryResponse(BaseModel):
     citations: list[str] = Field(default_factory=list)
     # Citation refs the answer made that aren't backed by the retrieved evidence
     unsupported_citations: list[str] = Field(default_factory=list)
+    # Agent mode only: the tool calls that gathered the evidence
+    agent_steps: list[AgentStep] = Field(default_factory=list)
+    meta: ResponseMeta | None = None

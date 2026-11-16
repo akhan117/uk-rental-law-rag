@@ -10,16 +10,18 @@ top of this was also tried and added nothing, so it isn't used.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
 import chromadb
+from chromadb.config import Settings
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 
 from chunk_quality import has_operative_text
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = Path(os.environ.get("RAG_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 COLLECTION_NAME = "uk_rental_law"
 CANDIDATES_PER_METHOD = 20
@@ -63,7 +65,8 @@ def expand_query(question: str) -> str:
 class Retriever:
     def __init__(self) -> None:
         self.model = SentenceTransformer(EMBED_MODEL)
-        client = chromadb.PersistentClient(path=str(DATA_DIR / "chroma"))
+        client = chromadb.PersistentClient(path=str(DATA_DIR / "chroma"),
+                                           settings=Settings(anonymized_telemetry=False))
         self.collection = client.get_collection(COLLECTION_NAME)
 
         # Same exclusion the Chroma index applies, so the lexical and dense
@@ -80,12 +83,16 @@ class Retriever:
         self.chunk_ids = [c["chunk_id"] for c in self.chunks]
         self.bm25 = BM25Okapi([_tokenize(c["text"]) for c in self.chunks])
 
-    def _dense_ids(self, query: str, n: int, where: dict | None = None) -> list[str]:
-        emb = self.model.encode([query], normalize_embeddings=True).tolist()
+    def _dense_ids(self, query: str, n: int,
+                   where: dict | None = None) -> tuple[list[str], dict[str, float]]:
+        """Dense candidates and their distances. Returned, not stored on the
+        instance: one Retriever serves concurrent requests (and agent tool calls on
+        worker threads), so per-query state on self would leak between them."""
+        emb = self.model.encode([query], normalize_embeddings=True,
+                                show_progress_bar=False).tolist()
         res = self.collection.query(query_embeddings=emb, n_results=n,
                                     **({"where": where} if where else {}))
-        self._last_distances = dict(zip(res["ids"][0], res["distances"][0]))
-        return res["ids"][0]
+        return res["ids"][0], dict(zip(res["ids"][0], res["distances"][0]))
 
     def _lexical_ids(self, query: str, n: int, allowed: set[str] | None = None) -> list[str]:
         scores = self.bm25.get_scores(_tokenize(query))
@@ -143,7 +150,7 @@ class Retriever:
         {"source_type": "legislation"}, {"court": "UKSC"}, {"act_title": "..."}.
         Applied to both halves of the hybrid search, not just the dense one."""
         query = expand_query(query)
-        dense_ids = self._dense_ids(query, CANDIDATES_PER_METHOD, where)
+        dense_ids, distances = self._dense_ids(query, CANDIDATES_PER_METHOD, where)
         lexical_ids = self._lexical_ids(query, CANDIDATES_PER_METHOD,
                                         self._allowed_ids(where) if where else None)
 
@@ -176,7 +183,7 @@ class Retriever:
                 "chunk_id": cid,
                 # Distance is only defined for the dense side; lexical-only hits get
                 # the dense cutoff distance so the scope gate stays conservative.
-                "distance": self._last_distances.get(cid, 1.0),
+                "distance": distances.get(cid, 1.0),
                 **entry,
             })
         return hits

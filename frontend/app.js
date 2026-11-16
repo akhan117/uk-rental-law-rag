@@ -59,7 +59,37 @@ function renderAnswer(data) {
   }
   const list = node.querySelector(".sources-list");
   (data.sources || []).forEach((s) => list.appendChild(renderSourceItem(s)));
+  if (data.agent_steps && data.agent_steps.length) {
+    const trace = node.querySelector(".agent-trace");
+    trace.hidden = false;
+    const steps = trace.querySelector(".agent-steps");
+    data.agent_steps.forEach((s) => steps.appendChild(renderStep(s)));
+  }
+  renderMeta(node.querySelector(".answer-meta"), data.meta);
   return node;
+}
+
+/** One agent tool call, e.g. "Looked up Housing Act 1988 s.21 - repealed". */
+function renderStep(step) {
+  const li = document.createElement("li");
+  const verb = { get_provision: "Looked up", search_law: "Searched", list_sources: "Listed sources" }[step.tool]
+    || step.tool;
+  li.textContent = `${verb}: ${step.summary}`;
+  return li;
+}
+
+/** What this answer cost to produce - the same numbers /metrics aggregates. */
+function renderMeta(el, meta) {
+  if (!el || !meta) return;
+  const parts = [`${(meta.latency_ms / 1000).toFixed(1)}s`];
+  if (meta.cached) parts.push("cached answer");
+  else if (meta.llm_calls) {
+    parts.push(`${(meta.tokens_in + meta.tokens_out).toLocaleString()} tokens`);
+    parts.push(`${meta.llm_calls} model call${meta.llm_calls === 1 ? "" : "s"}`);
+  } else parts.push("no model call");
+  if (meta.tool_calls) parts.push(`${meta.tool_calls} tool call${meta.tool_calls === 1 ? "" : "s"}`);
+  parts.push(meta.model);
+  el.textContent = parts.join(" · ");
 }
 
 function renderAbstain(data) {
@@ -73,7 +103,13 @@ function renderAbstain(data) {
     const list = node.querySelector(".sources-list");
     data.sources.forEach((s) => list.appendChild(renderSourceItem(s)));
   }
+  renderMeta(node.querySelector(".answer-meta"), data.meta);
   return node;
+}
+
+function selectedMode() {
+  const checked = form.querySelector('input[name="mode"]:checked');
+  return checked ? checked.value : "rag";
 }
 
 form.addEventListener("submit", async (e) => {
@@ -98,8 +134,10 @@ form.addEventListener("submit", async (e) => {
   // in the model. A static spinner is indistinguishable from a crash over that
   // long, so show the stage and a running clock: the wait is then evidently
   // progress rather than a hang.
+  const mode = selectedMode();
   const started = Date.now();
-  let stage = "Searching the legislation and case law…";
+  let stage = mode === "agent" ? "The agent is planning its research…"
+    : "Searching the legislation and case law…";
   const tick = () => {
     const secs = Math.round((Date.now() - started) / 1000);
     loading.textContent = secs < 3 ? stage : `${stage} (${secs}s)`;
@@ -108,9 +146,22 @@ form.addEventListener("submit", async (e) => {
   const timer = setInterval(tick, 1000);
 
   let preview = null;
+  let liveSteps = null;
   try {
-    await streamQuery(question, collectFacts(), {
+    await streamQuery(question, collectFacts(), mode, {
+      onStep: (step) => {
+        // Each tool call as it happens, so agent mode's extra time is visibly work.
+        if (!liveSteps) {
+          liveSteps = document.createElement("ol");
+          liveSteps.className = "agent-steps live";
+          conversation.insertBefore(liveSteps, loading);
+        }
+        liveSteps.appendChild(renderStep(step));
+        stage = "The agent is researching…";
+        tick();
+      },
       onSources: (data) => {
+        if (liveSteps) { liveSteps.remove(); liveSteps = null; }
         // Real evidence on screen while the model is still writing.
         stage = "Reading the sources and writing the answer…";
         tick();
@@ -120,6 +171,7 @@ form.addEventListener("submit", async (e) => {
       },
       onAnswer: (data) => {
         if (preview) preview.remove();
+        if (liveSteps) { liveSteps.remove(); liveSteps = null; }
         conversation.appendChild(data.abstained ? renderAbstain(data) : renderAnswer(data));
       },
       onError: (detail) => {
@@ -129,7 +181,7 @@ form.addEventListener("submit", async (e) => {
     });
   } catch (err) {
     loading.className = "loading error";
-    loading.textContent = "Something went wrong talking to the backend: " + err;
+    loading.textContent = "Something went wrong talking to the backend: " + (err.message || err);
   } finally {
     clearInterval(timer);
     if (!loading.classList.contains("error")) loading.remove();
@@ -139,13 +191,21 @@ form.addEventListener("submit", async (e) => {
 });
 
 /** Read the Server-Sent Events stream from /query/stream. */
-async function streamQuery(question, facts, handlers) {
+async function streamQuery(question, facts, mode, handlers) {
   const res = await fetch("/query/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, facts }),
+    body: JSON.stringify({ question, facts, mode }),
   });
-  if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+  if (!res.ok || !res.body) {
+    // Rate limits and the daily cap explain themselves in "detail".
+    let detail = "HTTP " + res.status;
+    try {
+      const body = await res.json();
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch { /* not JSON */ }
+    throw new Error(detail);
+  }
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -171,7 +231,8 @@ async function streamQuery(question, facts, handlers) {
       if (!dataLines.length) continue;
       const data = JSON.parse(dataLines.join("\n"));
 
-      if (event === "sources") handlers.onSources(data);
+      if (event === "step") handlers.onStep(data);
+      else if (event === "sources") handlers.onSources(data);
       else if (event === "answer") handlers.onAnswer(data);
       else if (event === "error") handlers.onError(data.detail || "unknown error");
     }
@@ -196,18 +257,23 @@ function renderSourcesPreview(data) {
   return wrap;
 }
 
-// Tell the user which hardware this is running on. Without a GPU an answer takes
-// most of a minute instead of a few seconds, and Ollama falls back to CPU
-// silently - so a slow session is otherwise indistinguishable from a broken one.
-// The check is deliberately loud when there's no GPU and quiet when there is.
+// Tell the user what is answering. Locally that means which hardware: without a
+// GPU an answer takes most of a minute instead of a few seconds, and Ollama
+// falls back to CPU silently - so a slow session is otherwise indistinguishable
+// from a broken one. Deliberately loud when there's no GPU and quiet when there
+// is. On a hosted deployment it means saying plainly that the question is sent
+// to an external model provider.
 (async function reportRuntime() {
   const note = document.getElementById("first-run-note");
+  const runtimeText = document.getElementById("runtime-text");
   const warning = document.getElementById("gpu-warning");
-  if (!note || !warning) return;
+  const modeNote = document.getElementById("mode-note");
+  if (!note || !warning || !runtimeText) return;
 
   // The backend learns this from its startup warm-up, which takes a few seconds,
   // so the page can load before the answer is known. Poll briefly rather than
   // give up and leave the user with no indication either way.
+  let described = false;
   for (let attempt = 0; attempt < 15; attempt++) {
     let info;
     try {
@@ -218,7 +284,31 @@ function renderSourcesPreview(data) {
       return; // The page works fine without this; never block on it.
     }
 
-    if (info.ready && info.gpu !== null) {
+    if (info.corpus) {
+      const c = info.corpus;
+      document.getElementById("corpus-size").textContent =
+        `${c.acts} Acts and instruments` + (c.cases ? `, ${c.cases} cases` : ", legislation only");
+    }
+
+    if (!described) {
+      described = true;
+      if (info.hosted) {
+        runtimeText.textContent = `Answers are written by ${info.model} (via ${info.provider}); ` +
+          "your question and the retrieved law are sent to that provider. Don't include personal details.";
+      } else {
+        runtimeText.textContent = "The AI model runs entirely on this computer — nothing is sent to the internet.";
+        if (modeNote) {
+          // Measured: the small local model doesn't call tools reliably, and
+          // agent mode then falls back to standard retrieval (see README).
+          modeNote.textContent = "Agent mode works best with a hosted model; locally it usually falls back to Standard.";
+          modeNote.hidden = false;
+        }
+      }
+    }
+
+    if (info.hosted) {
+      if (info.corpus) return;
+    } else if (info.ready && info.gpu !== null) {
       if (info.gpu) {
         // On its own line: this is the counterpart to the no-GPU warning, and
         // saying answers "should be fast" sets the expectation that a long wait

@@ -7,14 +7,15 @@
 <!-- ?v= is a cache-buster: bump it whenever app.js or style.css changes. Copies
      cached before the server sent no-cache headers can otherwise be reused
      without revalidating, which silently pairs an old UI with a new backend. -->
-<link rel="stylesheet" href="style.css?v=4">
+<link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
 <header>
   <h1>UK Residential Rental Law RAG <span class="tag">tech demo</span></h1>
   <p class="disclaimer">
-    Legal <strong>information</strong>, not legal advice. Curated corpus (7 Acts, 6 cases),
-    snapshot <span id="snapshot-date"></span>. England residential landlord-tenant law only.
+    Legal <strong>information</strong>, not legal advice. Curated corpus
+    (<span id="corpus-size">selected Acts and cases</span>), snapshot
+    <span id="snapshot-date"></span>. England residential landlord-tenant law only.
   </p>
 </header>
 
@@ -30,8 +31,8 @@
   </section>
 
   <p class="first-run-note" id="first-run-note">
-    The AI model runs entirely on this computer — nothing is sent to the internet. The sources appear
-    as soon as they're found, while the answer is still being written.
+    <span id="runtime-text">Checking which AI model is answering…</span> The sources appear as soon as
+    they're found, while the answer is still being written.
   </p>
 
   <p class="gpu-warning" id="gpu-warning" role="status" hidden>
@@ -44,9 +45,20 @@
   <section id="conversation" aria-live="polite"></section>
 
   <form id="ask-form">
-    <input id="question" type="text" autocomplete="off"
-           placeholder="e.g. How much notice does my landlord need to give to raise my rent?" required>
-    <button type="submit">Ask</button>
+    <fieldset class="mode-toggle" aria-label="Answer mode">
+      <label title="One hybrid search, then a cited answer. Fastest.">
+        <input type="radio" name="mode" value="rag" checked> Standard
+      </label>
+      <label title="The model plans its own research with tools: exact provision lookups, repeated searches, following cross-references. Slower, better on multi-part questions.">
+        <input type="radio" name="mode" value="agent"> Agent
+      </label>
+      <span class="mode-note" id="mode-note" hidden></span>
+    </fieldset>
+    <div class="ask-row">
+      <input id="question" type="text" autocomplete="off" maxlength="2000"
+             placeholder="e.g. How much notice does my landlord need to give to raise my rent?" required>
+      <button type="submit">Ask</button>
+    </div>
   </form>
 </main>
 
@@ -72,6 +84,11 @@
       <h3>Sources</h3>
       <ul class="sources-list"></ul>
     </div>
+    <details class="block agent-trace" hidden>
+      <summary>How the agent researched this</summary>
+      <ol class="agent-steps"></ol>
+    </details>
+    <p class="answer-meta"></p>
   </article>
 </template>
 
@@ -86,9 +103,10 @@
       <h3>Closest (insufficient) matches</h3>
       <ul class="sources-list"></ul>
     </div>
+    <p class="answer-meta"></p>
   </article>
 </template>
 
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

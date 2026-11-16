@@ -25,10 +25,12 @@ chunks in order to keep them out of the index.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
-MANIFEST_PATH = Path(__file__).resolve().parent.parent / "data" / "processed" / "repealed.json"
+MANIFEST_PATH = (Path(os.environ.get("RAG_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
+                 / "processed" / "repealed.json")
 
 # "section 21", "s.21", "s 21A", "Ground 3" - the forms a user actually types.
 _SECTION_RE = re.compile(r"\b(?:s\.?|sections?)\s*(\d+[A-Z]*)\b", re.IGNORECASE)

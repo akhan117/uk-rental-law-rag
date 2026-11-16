@@ -1,13 +1,6 @@
 from __future__ import annotations
 
-import json
-import os
-
-import httpx
-
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-MODEL = os.environ.get("RAG_MODEL", "qwen3:4b")
-OLLAMA_TIMEOUT = float(os.environ.get("RAG_TIMEOUT", "600"))
+import llm
 
 SYSTEM_PROMPT = """You are a legal information assistant for England residential landlord-tenant law. \
 You are NOT a solicitor and this is NOT legal advice.
@@ -131,7 +124,7 @@ def answer_schema(allowed_citations: list[str]) -> dict:
     required = list(ANSWER_FIELDS)
     allowed = sorted({c for c in allowed_citations if c})
     if allowed:
-        props["citations"] = {"type": "array", "items": {"enum": allowed}}
+        props["citations"] = {"type": "array", "items": {"type": "string", "enum": allowed}}
         required.append("citations")
     return {"type": "object", "properties": props, "required": required}
 
@@ -148,40 +141,34 @@ ANSWER_SCHEMA = {
 
 def generate_answer(question: str, facts: dict | None, hits: list[dict],
                     legal_question: str | None = None,
-                    repeal_note: str | None = None) -> dict:
+                    repeal_note: str | None = None, trace=None) -> dict:
     user_prompt = build_user_prompt(question, facts, hits, legal_question, repeal_note)
-    payload = {
-        "model": MODEL,
-        "system": SYSTEM_PROMPT,
-        "prompt": user_prompt,
-        "stream": False,
-        "think": False,
-        "format": answer_schema([h.get("citation") or h.get("case_name", "")
-                                 for h in hits]),
-        # num_predict bounds a degenerate loop; repeat_penalty makes one less
-        # likely in the first place. Observed on the repealed-s.21 question, where
-        # the model has little it is allowed to say and restated "the retrieved
-        # excerpts do not cover..." until the request timed out after ten minutes.
-        # Unbounded generation turns a weak answer into a hung app.
-        "options": {"temperature": 0.1, "num_predict": 900, "repeat_penalty": 1.15},
-    }
-    # Generous because the floor here is set by the slowest plausible machine, not
-    # a healthy one: on a laptop with no GPU a single answer is most of a minute,
-    # and more if the model is also still loading or something else is competing
-    # for the CPU. A timeout that trips returns a 500 and reads to the user as
-    # "the app is broken" - far worse than waiting.
-    with httpx.Client(timeout=OLLAMA_TIMEOUT) as client:
-        resp = client.post(f"{OLLAMA_URL}/api/generate", json=payload)
-        resp.raise_for_status()
-    raw = resp.json()["response"]
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        parsed = {}
+    allowed = [h.get("citation") or h.get("case_name", "") for h in hits]
+    # max_tokens bounds a degenerate loop; repeat_penalty (Ollama only) makes one
+    # less likely in the first place. Observed on the repealed-s.21 question,
+    # where the model has little it is allowed to say and restated "the retrieved
+    # excerpts do not cover..." until the request timed out after ten minutes.
+    # Unbounded generation turns a weak answer into a hung app.
+    #
+    # The timeout (llm.py, RAG_TIMEOUT) is generous for Ollama because the floor
+    # is set by the slowest plausible machine: on a laptop with no GPU a single
+    # answer is most of a minute. A timeout that trips reads to the user as "the
+    # app is broken" - far worse than waiting.
+    result_llm = llm.complete_json(
+        SYSTEM_PROMPT, user_prompt, answer_schema(allowed), name="legal_answer",
+        temperature=0.1, max_tokens=900, repeat_penalty=1.15,
+        trace=trace, stage="generation")
+    parsed = result_llm.parsed or {}
 
     result = {k: _as_text(v) for k, v in parsed.items() if k in ANSWER_FIELDS}
-    # Constrained by the schema to citations that were actually retrieved.
-    cited = [c for c in parsed.get("citations", []) if isinstance(c, str)]
+    # The schema enum constrains this to retrieved citations on providers that
+    # enforce json_schema. Not all do (llm.py degrades to plain JSON mode when a
+    # provider rejects the schema), so enforce the same guarantee in code: an
+    # authority that wasn't retrieved can't reach the citations list either way.
+    allowed_set = {c for c in allowed if c}
+    raw_cited = parsed.get("citations", [])
+    cited = [c for c in (raw_cited if isinstance(raw_cited, list) else [])
+             if isinstance(c, str) and c in allowed_set]
     if not result.get("short_answer"):
         # Schema-constrained decoding should prevent this; if it still happens,
         # say so rather than rendering an empty answer card.

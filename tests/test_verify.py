@@ -79,6 +79,11 @@ CROSS_REF_CASES = [
 ]
 
 
+def test_citation_verification_cases():
+    """pytest entry point; the script form below is kept for the README command."""
+    assert main() == 0
+
+
 def main() -> int:
     checks = ([(label, [text], should, HITS) for label, text, should in CASES]
               + [(label, fields, should, APOSTROPHE_HITS)
