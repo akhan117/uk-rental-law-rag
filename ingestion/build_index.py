@@ -3,17 +3,21 @@ model and persist to a Chroma collection. CPU is fine at this corpus size
 (~300-400 chunks).
 """
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
 import chromadb
+from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 from chunk_quality import has_operative_text  # noqa: E402
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+# RAG_DATA_DIR lets CI and the Docker build index a different corpus directory
+# (the committed legislation-only one) without touching a local full build.
+DATA_DIR = Path(os.environ.get("RAG_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 COLLECTION_NAME = "uk_rental_law"
 
@@ -87,7 +91,8 @@ def main() -> None:
     # bge models expect no special prefix for the passage/document side
     embeddings = model.encode(texts, show_progress_bar=True, normalize_embeddings=True)
 
-    client = chromadb.PersistentClient(path=str(DATA_DIR / "chroma"))
+    client = chromadb.PersistentClient(path=str(DATA_DIR / "chroma"),
+                                       settings=Settings(anonymized_telemetry=False))
     try:
         client.delete_collection(COLLECTION_NAME)
     except Exception:
