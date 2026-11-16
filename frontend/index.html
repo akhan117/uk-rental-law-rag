@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UK Residential Rental Law RAG — Demo</title>
+<!-- ?v= is a cache-buster: bump it whenever app.js or style.css changes. Copies
+     cached before the server sent no-cache headers can otherwise be reused
+     without revalidating, which silently pairs an old UI with a new backend. -->
+<link rel="stylesheet" href="style.css?v=4">
+</head>
+<body>
+<header>
+  <h1>UK Residential Rental Law RAG <span class="tag">tech demo</span></h1>
+  <p class="disclaimer">
+    Legal <strong>information</strong>, not legal advice. Curated corpus (7 Acts, 6 cases),
+    snapshot <span id="snapshot-date"></span>. England residential landlord-tenant law only.
+  </p>
+</header>
+
+<main>
+  <section id="facts-panel">
+    <button id="facts-toggle" type="button" aria-expanded="false">+ Add known facts (optional)</button>
+    <div id="facts-fields" hidden>
+      <label>Tenancy type <input id="f-tenancy-type" placeholder="e.g. assured shorthold"></label>
+      <label>Location <input id="f-location" placeholder="e.g. Manchester"></label>
+      <label>Tenancy start date <input id="f-start-date" placeholder="e.g. 2023-04-01"></label>
+      <label>Notice details <input id="f-notice" placeholder="e.g. served 1 month ago"></label>
+    </div>
+  </section>
+
+  <p class="first-run-note" id="first-run-note">
+    The AI model runs entirely on this computer — nothing is sent to the internet. The sources appear
+    as soon as they're found, while the answer is still being written.
+  </p>
+
+  <p class="gpu-warning" id="gpu-warning" role="status" hidden>
+    <strong>No graphics card detected — answers will be slow.</strong>
+    The AI model is running on the processor instead, so each answer takes
+    <strong>up to a minute</strong> rather than a few seconds. Nothing is broken; it just needs
+    patience. The sources appear within a second or two, while the answer is still being written.
+  </p>
+
+  <section id="conversation" aria-live="polite"></section>
+
+  <form id="ask-form">
+    <input id="question" type="text" autocomplete="off"
+           placeholder="e.g. How much notice does my landlord need to give to raise my rent?" required>
+    <button type="submit">Ask</button>
+  </form>
+</main>
+
+<template id="answer-template">
+  <article class="answer">
+    <div class="block short-answer">
+      <h3>Short answer</h3>
+      <p class="short-answer-text"></p>
+    </div>
+    <div class="block">
+      <h3>Applicable law</h3>
+      <p class="applicable-law-text"></p>
+    </div>
+    <div class="block">
+      <h3>How it generally applies</h3>
+      <p class="how-applies-text"></p>
+    </div>
+    <div class="block uncertainties-block" hidden>
+      <h3>Uncertainties / what else is needed</h3>
+      <p class="uncertainties-text"></p>
+    </div>
+    <div class="block sources-block">
+      <h3>Sources</h3>
+      <ul class="sources-list"></ul>
+    </div>
+  </article>
+</template>
+
+<template id="abstain-template">
+  <article class="answer abstain">
+    <div class="block">
+      <h3>I can't answer this from the corpus</h3>
+      <p class="abstain-text"></p>
+      <p class="abstain-reason"></p>
+    </div>
+    <div class="block sources-block near-misses" hidden>
+      <h3>Closest (insufficient) matches</h3>
+      <ul class="sources-list"></ul>
+    </div>
+  </article>
+</template>
+
+<script src="app.js?v=4"></script>
+</body>
+</html>

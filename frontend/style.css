@@ -1,0 +1,265 @@
+:root {
+  --ink: #1a1f2b;
+  --muted: #5b6472;
+  --bg: #f7f6f3;
+  --panel: #ffffff;
+  --border: #e2e0da;
+  --accent: #1f4b43;
+  --accent-soft: #e7efec;
+  --warn-bg: #fdf3e7;
+  --warn-border: #e8c48a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+}
+
+header {
+  padding: 1.5rem 1.5rem 1rem;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0 0 0.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.tag {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 0.2rem 0.5rem;
+  border-radius: 1rem;
+}
+
+.disclaimer {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+main {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 1.5rem 2rem;
+}
+
+#facts-panel {
+  margin-bottom: 1rem;
+}
+
+#facts-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+#facts-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}
+
+#facts-fields label {
+  font-size: 0.78rem;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+#facts-fields input {
+  font-size: 0.88rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  font-family: inherit;
+}
+
+#conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.question-echo {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+  padding: 0.6rem 0.9rem;
+  border-radius: 0.8rem 0.8rem 0.1rem 0.8rem;
+  max-width: 80%;
+  font-size: 0.92rem;
+}
+
+.answer {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  padding: 1rem 1.1rem;
+}
+
+.answer.abstain {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+}
+
+.block { margin-bottom: 0.9rem; }
+.block:last-child { margin-bottom: 0; }
+
+.block h3 {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 0 0 0.3rem;
+}
+
+.block p { margin: 0; font-size: 0.94rem; }
+
+.short-answer p { font-size: 1rem; font-weight: 500; }
+
+.sources-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.source-item {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.6rem;
+}
+
+.source-item summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--accent);
+}
+
+.source-item summary a {
+  color: inherit;
+}
+
+.source-item .source-text {
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+  white-space: pre-wrap;
+  max-height: 10rem;
+  overflow-y: auto;
+}
+
+#ask-form {
+  display: flex;
+  gap: 0.5rem;
+  position: sticky;
+  bottom: 1rem;
+}
+
+#question {
+  flex: 1;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  font-family: inherit;
+  background: var(--panel);
+}
+
+#ask-form button {
+  padding: 0.7rem 1.1rem;
+  font-size: 0.95rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 0.6rem;
+  cursor: pointer;
+}
+
+#ask-form button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.loading {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.loading.error {
+  color: #b3261e;
+  font-style: normal;
+}
+
+/* Sources shown while the answer is still being written. Visibly provisional,
+   so it doesn't read as a finished answer that is missing its text. */
+.sources-preview {
+  border: 1px dashed var(--border, #d9d9d9);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  margin: 0.5rem 0;
+  opacity: 0.85;
+}
+
+.sources-preview-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* Shown only when the model fell back to the CPU. Deliberately prominent: the
+   alternative is a user who thinks the app has frozen. */
+.gpu-warning {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #6b4c00;
+  background: #fff6e0;
+  border: 1px solid #f0d28a;
+  border-left: 4px solid #e0a800;
+  border-radius: 8px;
+  padding: 0.7rem 0.95rem;
+  margin: 0 0 0.75rem;
+}
+
+.gpu-warning strong {
+  color: #5a3f00;
+}
+
+.runtime-good {
+  display: inline-block;
+  margin-top: 0.35rem;
+}
+
+.first-run-note {
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+  padding: 0.6rem 0.85rem;
+  margin: 0 0 0.75rem;
+  line-height: 1.45;
+}

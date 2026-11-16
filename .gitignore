@@ -1,0 +1,22 @@
+# Environments / dependencies
+venv/
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+.env
+
+# Corpus and built index - regenerate with the ingestion/ scripts (see README)
+data/
+
+# Project write-ups and the tooling that renders them (not part of the app)
+documents/
+package.json
+package-lock.json
+
+# Editor / local tool config
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
