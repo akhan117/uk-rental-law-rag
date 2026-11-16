@@ -77,6 +77,19 @@ echo "Downloading the search model (about 130MB, one-time only)..."
 venv/bin/python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')" \
     || echo "WARNING: could not pre-download the search model; it will download on first use."
 
+# A fresh clone has the parsed legislation (data/processed) but no search index;
+# build it once. Skipped when an index exists, so a local full build (with case
+# law) is never overwritten.
+if [ ! -d data/chroma ]; then
+    echo
+    echo "Building the search index (one-time, about a minute)..."
+    if ! venv/bin/python ingestion/build_index.py; then
+        echo "ERROR: Could not build the search index."
+        read -r -p "Press return to close..."
+        exit 1
+    fi
+fi
+
 echo
 echo "================================================================"
 echo " Setup complete! Double-click start.command to run the app."

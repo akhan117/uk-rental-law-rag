@@ -91,6 +91,21 @@ if errorlevel 1 (
     echo WARNING: could not pre-download the search model; it will download on first use.
 )
 
+rem A fresh clone has the parsed legislation (data\processed) but no search
+rem index; build it once. Skipped when an index already exists, so a local full
+rem build (with case law) is never overwritten.
+if not exist "%~dp0data\chroma" (
+    echo.
+    echo Building the search index ^(one-time, about a minute^)...
+    venv\Scripts\python.exe ingestion\build_index.py
+    if errorlevel 1 (
+        echo.
+        echo ERROR: Could not build the search index.
+        pause
+        exit /b 1
+    )
+)
+
 echo.
 echo ================================================================
 echo  Setup complete! Double-click start.bat to run the app.

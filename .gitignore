@@ -6,8 +6,17 @@ __pycache__/
 *.pyc
 .env
 
-# Corpus and built index - regenerate with the ingestion/ scripts (see README)
-data/
+# Corpus and built index - regenerate with the ingestion/ scripts (see README).
+# The parsed *legislation* is committed: it is Crown copyright under the Open
+# Government Licence v3.0, which permits republication, and CI and the Docker
+# build need it to build the index without a headless-browser fetch. Case law is
+# not: Find Case Law material needs a separate licence for computational use
+# (see Known limitations), so it stays local-only.
+data/*
+!data/processed/
+data/processed/*
+!data/processed/legislation_chunks.jsonl
+!data/processed/repealed.json
 
 # Project write-ups and the tooling that renders them (not part of the app)
 documents/

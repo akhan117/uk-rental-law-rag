@@ -1,0 +1,158 @@
+name: CI
+
+# Every push and PR: lint, unit tests, and the LLM-free retrieval eval gated
+# against the committed baseline; then build the container and smoke-test it.
+# Needs no secrets, so it runs the same on forks and PRs.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  TORCH_VERSION: "2.14.1"
+  ANONYMIZED_TELEMETRY: "False"
+  HF_HOME: /home/runner/.cache/huggingface
+
+jobs:
+  test:
+    name: Lint, tests, retrieval eval
+    # A PR from a branch of this repo already ran on its push; only forks need
+    # the pull_request run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements*.txt
+            constraints.txt
+
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}"
+          pip install -r requirements-dev.txt -c constraints.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Unit and API tests
+        run: pytest
+
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.HF_HOME }}
+          key: hf-bge-small-en-v1.5
+
+      - name: Build index from committed corpus
+        run: python ingestion/build_index.py
+
+      - name: Retrieval eval (deterministic, no LLM) and regression gate
+        run: >
+          python eval/run_eval.py --retrieval-only
+          --check eval/thresholds.json
+          --baseline eval/baseline_retrieval.json
+          --out eval-retrieval.json
+          --summary-md "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-retrieval
+          path: eval-retrieval.json
+          if-no-files-found: ignore
+
+  docker:
+    name: Build and smoke-test container
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Validate compose file
+        run: docker compose config --quiet && docker compose --profile local config --quiet
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: uk-rental-law-rag:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: |
+          docker run -d --name rag -p 7860:7860 -e APP_VERSION=${GITHUB_SHA::7} uk-rental-law-rag:ci
+          for i in $(seq 1 60); do
+            if curl -sf localhost:7860/health > health.json; then break; fi
+            sleep 2
+          done
+          cat health.json
+          python3 - <<'EOF'
+          import json, time, urllib.request
+
+          def get(path):
+              return json.load(urllib.request.urlopen(f"http://localhost:7860{path}", timeout=30))
+
+          def post(question):
+              req = urllib.request.Request(
+                  "http://localhost:7860/query", data=json.dumps({"question": question}).encode(),
+                  headers={"Content-Type": "application/json"})
+              return json.load(urllib.request.urlopen(req, timeout=60))
+
+          # Wait for the background warm-up to load the index.
+          for _ in range(60):
+              if get("/health").get("corpus"):
+                  break
+              time.sleep(2)
+          health = get("/health")
+          assert health["corpus"] and health["corpus"]["chunks"] > 300, health
+          # Both gates run without an LLM, so no API key is needed here:
+          # keyword gate, and the retrieval-confidence gate on an off-corpus question.
+          assert post("What notice does a landlord need to give in Scotland?")["abstained"]
+          r = post("What is the best mortgage rate right now?")
+          assert r["abstained"] and r["meta"]["llm_calls"] <= 1, r
+          html = urllib.request.urlopen("http://localhost:7860/", timeout=10).read().decode()
+          assert "Rental Law" in html
+          assert "rag_requests_total" in urllib.request.urlopen(
+              "http://localhost:7860/metrics", timeout=10).read().decode()
+          print("smoke test passed")
+          EOF
+
+      - name: Container logs
+        if: always()
+        run: docker logs rag 2>&1 | tail -n 80
+
+      - name: Push to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          image="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          docker tag uk-rental-law-rag:ci "$image:${GITHUB_SHA::7}"
+          docker tag uk-rental-law-rag:ci "$image:latest"
+          docker push "$image:${GITHUB_SHA::7}"
+          docker push "$image:latest"

@@ -1,0 +1,17 @@
+# Transitive pins for the retrieval stack, taken from the environment the
+# committed eval baselines were measured in. Embedding numerics depend on these,
+# and the CI retrieval gate compares per-question recall against
+# eval/baseline_retrieval.json, so an unpinned upgrade could move a borderline
+# question and fail the build for no reason in our code.
+# Use with: pip install -r requirements.txt -c constraints.txt
+numpy==2.2.6
+transformers==4.46.3
+tokenizers==0.20.3
+huggingface_hub==0.36.2
+safetensors==0.8.0
+scikit-learn==1.7.2
+scipy==1.15.3
+onnxruntime==1.23.2
+pydantic==2.10.4
+pydantic_core==2.27.2
+starlette==0.41.3

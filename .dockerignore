@@ -1,0 +1,18 @@
+# Allowlist: nothing enters the build context unless named here. That keeps
+# local-only material out of the image by construction - the full local corpus
+# (including case law), the built local index, the venv, documents, and any
+# personal files in the working directory.
+*
+
+!backend/
+!frontend/
+!eval/
+!ingestion/build_index.py
+!data/processed/legislation_chunks.jsonl
+!data/processed/repealed.json
+!requirements.txt
+!constraints.txt
+
+**/__pycache__
+**/*.pyc
+eval/eval_results_*.json

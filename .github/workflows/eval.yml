@@ -1,0 +1,109 @@
+name: LLM eval
+
+# The full 62-question eval against a hosted model. Not on every push: it costs
+# free-tier quota and its generation metrics carry sampling noise (README:
+# about +/-20 points on the adversarial set between identical runs), so it runs
+# weekly and on demand, gated with tolerance (eval/thresholds.json, "full").
+#
+# Requires the GROQ_API_KEY repository secret (or the key for whichever
+# provider is chosen). Skips cleanly when it isn't set.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Retrieval strategy"
+        type: choice
+        options: [rag, agent]
+        default: rag
+      provider:
+        description: "LLM provider (groq | gemini | openrouter)"
+        default: groq
+      model:
+        description: "Model id (blank = provider default)"
+        default: ""
+      types:
+        description: "Comma-separated item types (blank = all)"
+        default: ""
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC, RAG mode
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+  TORCH_VERSION: "2.14.1"
+  ANONYMIZED_TELEMETRY: "False"
+  HF_HOME: /home/runner/.cache/huggingface
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      LLM_PROVIDER: ${{ inputs.provider || 'groq' }}
+      LLM_MODEL: ${{ inputs.model }}
+      MODE: ${{ inputs.mode || 'rag' }}
+      TYPES: ${{ inputs.types }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      # Free tiers rate-limit tokens per minute; a full run is meant to wait
+      # those out (Retry-After), not fail on them.
+      LLM_MAX_RETRIES: "12"
+    steps:
+      - name: Check for an API key
+        id: key
+        run: |
+          case "$LLM_PROVIDER" in
+            groq) k="$GROQ_API_KEY" ;; gemini) k="$GEMINI_API_KEY" ;;
+            openrouter) k="$OPENROUTER_API_KEY" ;; *) k="" ;;
+          esac
+          if [ -z "$k" ]; then
+            echo "::notice::No API key secret for $LLM_PROVIDER - skipping the LLM eval."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.key.outputs.skip != 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.key.outputs.skip != 'true'
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements*.txt
+            constraints.txt
+
+      - name: Install dependencies
+        if: steps.key.outputs.skip != 'true'
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}"
+          pip install -r requirements.txt -c constraints.txt
+
+      - uses: actions/cache@v4
+        if: steps.key.outputs.skip != 'true'
+        with:
+          path: ${{ env.HF_HOME }}
+          key: hf-bge-small-en-v1.5
+
+      - name: Build index
+        if: steps.key.outputs.skip != 'true'
+        run: python ingestion/build_index.py
+
+      - name: Run eval
+        if: steps.key.outputs.skip != 'true'
+        run: |
+          args="--mode $MODE --check eval/thresholds.json --out eval-full.json --summary-md $GITHUB_STEP_SUMMARY"
+          if [ -n "$TYPES" ]; then args="$args --types $TYPES"; fi
+          python eval/run_eval.py $args
+
+      - name: Upload results
+        if: always() && steps.key.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-${{ env.LLM_PROVIDER }}-${{ env.MODE }}
+          path: eval-full.json
+          if-no-files-found: ignore
