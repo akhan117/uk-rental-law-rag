@@ -78,6 +78,10 @@ main {
   margin-top: 0.6rem;
 }
 
+/* An id selector's display beats the UA's [hidden] rule, which left the facts
+   panel permanently open despite the toggle. */
+#facts-fields[hidden] { display: none; }
+
 #facts-fields label {
   font-size: 0.78rem;
   color: var(--muted);
@@ -178,7 +182,10 @@ main {
   flex-direction: column;
   gap: 0.4rem;
   position: sticky;
-  bottom: 1rem;
+  bottom: 0;
+  /* Opaque, or answers scrolling underneath show through the mode row. */
+  background: var(--bg);
+  padding: 0.5rem 0 1rem;
 }
 
 .ask-row {
