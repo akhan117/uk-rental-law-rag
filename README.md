@@ -1,17 +1,26 @@
 # UK Residential Rental Law RAG — Demo
 
+[![CI](https://github.com/akhan117/uk-rental-law-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/akhan117/uk-rental-law-rag/actions/workflows/ci.yml)
+
 A source-grounded legal information assistant for **England residential landlord-tenant law**,
 built to a separate design spec (cited in code comments as `Docs.pdf`, not included in this repo): retrieve legislation + case law, generate
-a cited answer with a local Qwen3 model, and abstain when the evidence doesn't support an answer.
+a cited answer, and abstain when the evidence doesn't support an answer. Runs fully locally on
+Qwen3 via Ollama, or against a free hosted LLM API; ships as one Docker image, is tested and
+eval-gated in CI, and deploys automatically to Hugging Face Spaces.
 
 **This is a tech demo, not a production legal tool.** Legal information, not legal advice. See
 [Known limitations](#known-limitations) before trusting any specific answer.
 
+**Jump to:** [Architecture](#architecture) · [Deployment and operations](#deployment-and-operations)
+· [Agent mode](#agent-mode-tool-calling) · [MCP server](#mcp-server) · [Eval results](#eval-results)
+· [Findings](#finding-1-section-21-has-been-repealed-in-the-live-text-and-the-system-initially-hallucinated-around-the-gap)
+
 ## Running this if you're not a developer
 
-> **Cloned from GitHub?** The repo doesn't include the corpus or the built search index
-> (`data/`), so run step 1 of the [developer path](#running-it-manually-developer-path) once
-> before using the setup/start scripts below.
+> **Cloned from GitHub?** The repo includes the parsed legislation, and setup builds the
+> search index from it. Case law is not included (see the licensing note under
+> [Known limitations](#known-limitations)). To add it, run step 1 of the
+> [developer path](#running-it-manually-developer-path).
 
 **On Windows** use `setup.bat` / `start.bat`; **on a Mac** use `setup.command` / `start.command`
 (if macOS refuses to open them, run `chmod +x setup.command start.command` once in Terminal).
@@ -53,11 +62,29 @@ backend/  (FastAPI)
    query_understanding.py → rewrite the question into statutory vocabulary + sub-queries
    scope.py        → keyword + retrieval-confidence gate (abstain before generating)
    retrieval.py    → hybrid dense + BM25, one search per sub-query, interleaved
-   generate.py     → citation-enforcing prompt → local Ollama (qwen3:4b) → structured JSON
+   agent.py        → optional: the model plans retrieval itself with tools (tools.py)
+   generate.py     → citation-enforcing prompt → LLM → schema-constrained JSON
+   llm.py          → one interface over Ollama (native) and any OpenAI-compatible API
+                     (Groq / Gemini / OpenRouter): structured-output ladder, retries, usage
    verify.py       → Act-qualified citation check against what was actually retrieved
+   telemetry.py    → per-request trace → JSON log line + /metrics (Prometheus) + /metrics/summary
+   guard.py        → public-demo protection: per-IP rate limit, daily cap, answer cache
+   mcp_server.py   → the corpus tools + full pipeline exposed over MCP
         ▼
 frontend/  → static chat UI (vanilla JS), renders short answer → applicable law →
-             how it applies → uncertainties → sources (with links + expandable raw text)
+             how it applies → uncertainties → sources (with links + expandable raw text),
+             agent steps live, and latency/tokens per answer
+```
+
+```
+git push ──► CI ─┬─ ruff + pytest (90 tests, no model or network)
+                 ├─ build index from committed corpus → retrieval eval (no LLM, deterministic)
+                 │    gated against eval/baseline_retrieval.json, per question
+                 └─ docker build → smoke test the container → push to ghcr.io
+                        │ (main, green)
+                        ▼
+                 deploy.yml → Hugging Face Docker Space → wait for build → live smoke test
+weekly / manual: eval.yml → full 62-question eval on the hosted LLM, gated with tolerance
 ```
 
 ## Curated seed corpus
@@ -93,8 +120,9 @@ because only ingestion uses it):
 `pip install playwright && playwright install chromium`.
 
 ```bash
-# 1. Ingest — required once after cloning: data/ is not committed. Builds data/raw,
-#    data/processed and data/chroma. Re-run to refresh the corpus or widen it.
+# 1. Ingest - optional after cloning: the parsed legislation is committed, so
+#    `python ingestion/build_index.py` alone gives a working legislation-only
+#    index. The full fetch below adds case law and refreshes the corpus.
 cd ingestion
 python fetch_legislation.py   # fetches curated Acts (headless-browser, ~2-3 min)
 python fetch_cases.py         # fetches curated cases
@@ -110,8 +138,201 @@ uvicorn main:app --reload     # serves API + frontend at http://localhost:8000
 # 3. Evaluate
 cd ../eval
 python run_eval.py            # scores against gold_questions.jsonl
-python ../tests/test_verify.py # citation-verification unit tests (no model needed)
+python run_eval.py --retrieval-only   # recall + gates only: no LLM, deterministic, ~1 min
+python run_eval.py --mode agent       # same benchmark, agent-planned retrieval
+python compare_models.py      # side-by-side table of every recorded run
+cd ..
+pip install -r requirements-dev.txt && pytest   # 90 unit/API tests, no model needed
 ```
+
+## Deployment and operations
+
+### Choosing the LLM backend
+
+The model is configuration, not code (`backend/llm.py`). Everything else (retrieval, gates,
+the citation-constrained answer schema, verification) is identical across backends.
+
+| `LLM_PROVIDER` | Default model | Key variable | Notes |
+|---|---|---|---|
+| `ollama` (default) | `qwen3:4b` | — | Fully local. Native API, so `think: false`, `num_predict` and `repeat_penalty` apply exactly as measured below. `RAG_MODEL` still works. |
+| `groq` | `openai/gpt-oss-20b` | `GROQ_API_KEY` | Free tier, email signup. Strict `json_schema` including the citation `enum`; tool calling. Used for the public demo. |
+| `gemini` | `gemini-2.5-flash` | `GEMINI_API_KEY` | Free tier via Google AI Studio. OpenAI-compatible endpoint. |
+| `openrouter` | `openai/gpt-oss-20b:free` | `OPENROUTER_API_KEY` | `:free` models; low daily request cap without credits. |
+| `openai` | set `LLM_MODEL` | `LLM_API_KEY` | Any OpenAI-compatible URL (`LLM_BASE_URL`), including Ollama's own `/v1`. |
+
+`LLM_MODEL` overrides the model id. All variables are listed in [`.env.example`](.env.example).
+
+**Structured output degrades, it doesn't break.** Providers differ most in how much of JSON
+Schema they enforce, and the schema here is load-bearing (Findings 3 and 7). So `llm.py`
+walks a ladder: strict `json_schema` → best-effort `json_schema` → `json_object` → schema in
+the prompt. Each provider's first rejected rung is remembered for the life of the process. The
+one guarantee that used to live only in the schema, that `citations` can hold only retrieved
+authorities, is now also enforced in code (`generate.py`), so it holds on every rung.
+Free-tier rate limits (429 + `Retry-After`) are waited out, not failed on.
+
+### Docker
+
+```bash
+docker build -t uk-rental-law-rag .
+docker run -p 7860:7860 -e GROQ_API_KEY=... uk-rental-law-rag     # http://localhost:7860
+
+# or with compose: hosted LLM, or app + Ollama fully local
+GROQ_API_KEY=... docker compose up app
+LLM_PROVIDER=ollama docker compose --profile local up
+```
+
+One image: FastAPI, the bge embedding model and a pre-built Chroma index are baked in at build
+time, so a container start downloads nothing and builds nothing. It installs CPU-only torch, not
+the default CUDA wheel, which would add about 2.5GB of libraries a CPU host never loads. The
+build context is an allowlist (`.dockerignore`), so local-only material can't get into the
+image. The image ships the **legislation-only** corpus. Case law stays local because of the
+licence question under [Known limitations](#known-limitations). To serve your local full
+corpus from the container, mount it: `-v ./data:/app/data`.
+
+### CI/CD
+
+Three workflows, all free on a public repo:
+
+- **`ci.yml`, every push and PR.** `ruff`; `pytest` (90 tests, all offline: the LLM is faked
+  at the HTTP layer with `httpx.MockTransport`, so the real provider adapters are what's
+  tested); then it builds the index from the committed corpus and runs the **retrieval eval
+  with no LLM at all**. That eval is deterministic (README Finding 5: zero in-scope questions
+  need the LLM rewrite), so it is gated strictly: thresholds in `eval/thresholds.json`, plus a
+  per-question check against `eval/baseline_retrieval.json`. A question that retrieved its
+  provision in the baseline and no longer does fails the build by name. After that it builds
+  the Docker image, smoke-tests the running container (health, both abstention gates,
+  `/metrics`) and pushes it to `ghcr.io` from `main`.
+- **`eval.yml`, weekly and on demand.** The full 62-question eval against the hosted model, in
+  `rag` or `agent` mode. Generation metrics carry sampling noise (see the variance note
+  below), so these are gated with tolerance, as floors that catch a regression rather than
+  targets that flap. It skips cleanly if no API key secret is set.
+- **`deploy.yml`, after CI passes on `main`.** It pushes the app to a Hugging Face Docker Space,
+  syncs API keys from GitHub secrets into Space *secrets*, waits for the Space to build, and
+  smoke-tests the live URL. It checks that the version on `/health` is the commit just deployed,
+  so it can't pass against the previous build that's still serving.
+
+The committed corpus is `data/processed/legislation_chunks.jsonl` (Crown copyright, Open
+Government Licence v3.0, which permits republication). Without it, CI would need the
+headless-browser fetch described in Architecture.
+
+### Deploying your own copy (Hugging Face Spaces, free)
+
+1. Create a free account at huggingface.co and an access token with **write** scope.
+2. Create a free Groq API key at console.groq.com.
+3. In the GitHub repo, open **Settings → Secrets and variables → Actions** and add the secrets
+   `HF_TOKEN` and `GROQ_API_KEY` and the variable `HF_SPACE` (e.g. `your-hf-name/uk-rental-law-rag`).
+4. Push to `main`, or run the *Deploy to Hugging Face Spaces* workflow by hand. The Space is
+   created if it doesn't exist, and every later green push to `main` redeploys it.
+
+The public image enables the guards in `backend/guard.py`. Anyone can spend a public demo's
+free-tier quota, so it rate-limits per visitor (6 questions a minute), caps LLM-backed questions
+per day (300), and caches answers so the repeated example questions cost no tokens. A free CPU
+Space sleeps after a period without visitors, and the first request after that waits for it to
+wake.
+
+### Observability
+
+Every request produces one trace (`backend/telemetry.py`) with per-stage latency (scope gate,
+retrieval, rewrite, agent planning, generation, verify), LLM calls and tokens, tool calls,
+which gate fired, and whether citation verification flagged the answer. Each trace is:
+
+- **logged** as a single JSON line on stdout (visible in `docker logs` and the Space's logs);
+- **returned** to the client as `meta` on every answer (the UI shows it under each answer);
+- **aggregated** in a rolling window served at `/metrics` (Prometheus format: request counts
+  by mode and outcome, a token counter, a latency histogram, and the citation-flag ratio) and
+  `/metrics/summary` (JSON: p50/p95/p99 latency overall and per stage, average tokens and LLM
+  calls per answer, estimated cost per answer at a configurable list price, cache hit rate).
+
+The citation-flag ratio is the online version of the eval's hallucinated-authority rate: the
+same `verify.py` check, measured on live traffic instead of on the gold set.
+
+`eval/benchmark.py` load-tests any deployment over the same streaming endpoint the browser
+uses. It reports p50/p95 latency, time to first sources, tokens and tool calls per answer,
+and throughput:
+
+```bash
+python eval/benchmark.py --url http://127.0.0.1:8000 --n 30
+python eval/benchmark.py --url https://<your-space>.hf.space --n 20 --mode agent
+```
+
+**Measured serving numbers, local backend** (Qwen3-4B on Ollama, RTX 3070 Laptop GPU, full
+corpus; `benchmark.py --n 20` over HTTP, cache cold, cross-checked against `/metrics/summary`):
+
+| | |
+|---|---|
+| end-to-end latency p50 / p95 | 9.8s / 13.8s |
+| time to first sources p50 / p95 | 0.04s / 0.05s |
+| retrieval p95 (hybrid dense + BM25) | 0.046s |
+| generation p95 | 13.8s |
+| tokens per answer | ~1,680 in / ~340 out, 1.0 LLM calls |
+| answers flagged by citation verification | 10% (2 of 20) |
+
+Generation is effectively all of the latency, and that is the case for the hosted backend.
+The sources event arrives in about 40ms, so the UI shows real evidence immediately. Hosted-backend
+numbers come from the same `benchmark.py` run against the deployed Space.
+
+## Agent mode (tool calling)
+
+`mode: "agent"` (the **Agent** toggle in the UI) hands retrieval *planning* to the model. It
+gets three tools over the corpus (`backend/tools.py`) and up to four rounds to use them:
+
+| Tool | What it does that single-shot retrieval can't |
+|---|---|
+| `search_law(query, source_type?, act?)` | The model picks the wording and the filters, and can search again after reading the results. |
+| `get_provision(act, provision)` | Exact lookup by Act and section or Ground (`"HA 1988"`, `"s.8(4AA)"`, `"Ground 8"`). Similarity ranking can lose a named provision to a neighbour; a lookup can't. It also reports **repealed** provisions from the manifest, which retrieval can't do because their text is gone (Finding 1). |
+| `list_sources()` | What the corpus actually holds, so "not covered" can come from knowledge rather than a miss. |
+
+This targets the two measured weak spots of single-shot RAG: multi-hop questions, where no one
+chunk states the combined rule (Known limitations), and questions that name a provision which
+similarity search then fails to surface.
+
+**What the agent is not allowed to do is write the answer.** The evidence it gathers goes
+through exactly the same path as RAG mode: the citation `enum` built from the evidence, the
+schema-constrained answer, and post-generation verification. The evidence cap is the same k=6.
+The scope gate still applies, though an exact lookup satisfies it by itself, since the agent
+named the provision. If the agent finds nothing, or makes no tool calls, the request falls back
+to ordinary retrieval, so agent mode is never worse than RAG mode. Because only the retrieval
+strategy differs, `run_eval.py --mode agent` measures that one variable on the same benchmark.
+
+The loop is hand-rolled (`backend/agent.py`, about 150 lines) rather than LangGraph. It is one
+bounded loop, and having it written out keeps every step in the trace and debuggable.
+
+**Measured: the local 4B model can't drive it.** With tools attached, Qwen3-4B on Ollama 0.40
+writes about 2,000 tokens of reasoning before every tool call, whether `think` is false, true,
+or `/no_think` is in the prompt. That is about 60s per planning round on an RTX 3070 Laptop
+GPU. With the full research prompt it made no tool call at all within 3,500 tokens. Locally,
+agent mode therefore falls back to RAG (the UI says so); `AGENT_PLAN_MAX_TOKENS` raises the
+budget for anyone who wants to wait. Agent mode is meant for the hosted backend, where
+gpt-oss-20b at `reasoning_effort=low` plans in a few hundred tokens.
+
+## MCP server
+
+`backend/mcp_server.py` exposes the same corpus tools, plus `answer_question` (the full
+grounded pipeline using the configured LLM), to any MCP client such as Claude Desktop or Claude
+Code. The tools behave exactly as they do for the in-app agent, including exact lookup and
+repeal awareness.
+
+```bash
+pip install -r requirements-mcp.txt
+python backend/mcp_server.py          # stdio transport
+```
+
+Client config, e.g. Claude Desktop's `claude_desktop_config.json` (use absolute paths):
+
+```json
+{
+  "mcpServers": {
+    "uk-rental-law": {
+      "command": "/path/to/repo/venv/bin/python",
+      "args": ["/path/to/repo/backend/mcp_server.py"],
+      "env": {"LLM_PROVIDER": "groq", "GROQ_API_KEY": "..."}
+    }
+  }
+}
+```
+
+It uses `mcp` 1.x on purpose: 2.x needs newer pydantic and Starlette than the pinned FastAPI
+supports.
 
 ## Eval results
 
@@ -182,6 +403,24 @@ nothing in the excerpts bears on the question" took citation correctness on the 
 
 These are reported as measured, not polished. The findings below are more informative than the
 headline numbers.
+
+**Re-run after the backend refactor.** Moving generation behind `llm.py`, the agent and
+telemetry plumbing touched every request path, so the full eval was re-run on the same
+local Qwen3-4B before shipping it (`eval/results/qwen3-4b_rag_2026-11-16.json`). Every
+retrieval, citation, answer, abstention, must-answer, stale-law and adversarial figure is
+identical to the table above. Hallucinated authority came in at 3/30 against 2/30, which is
+within the run-to-run variance described below. The same file now records latency and tokens
+per question: p50 6.3s, p95 13.7s across all 62 items (abstentions included), ~1,540 tokens in
+and ~285 out per answered question.
+
+**Legislation-only corpus (CI, Docker, the public Space).** Without the six cases, the 6
+case-law questions are skipped rather than failed, and retrieval on the remaining 24 in-scope
+questions is **20/24 (83%)**, with all 14 out-of-scope probes stopped before generation.
+That run is `eval/baseline_retrieval.json`, the baseline CI gates every push against.
+
+**Hosted backend.** The *LLM eval* workflow produces the same table for `openai/gpt-oss-20b`
+on Groq, in both `rag` and `agent` modes. Those numbers will be added here once that workflow
+has run with an API key, rather than estimated in advance.
 
 ### Model comparison: Qwen3-4B vs Qwen3-8B
 
@@ -541,7 +780,11 @@ generation, not to extend the wait.
   Licence, which covers ordinary reading and quotation but requires a separate transactional licence
   for computational use at scale. For a six-judgment demo run locally this is a paperwork gap rather
   than a live infringement risk, but it is a real precondition for anything shipped or published,
-  and it is unresolved rather than overlooked.
+  and it is unresolved rather than overlooked. **That is why everything published - the git
+  repo, the Docker image and the public Space - carries legislation only** (Open Government
+  Licence), and the six cases stay in local builds. Case-law questions are reported as skipped,
+  not failed, when the corpus doesn't hold them; adding the licence and the cases is a data
+  change, not a code change.
 - **Only one statutory instrument is ingested.** The Prescribed Information Order 2007 is in;
   the Assured Tenancies (Forms) Regulations 2015 were tried and dropped because their substance is
   the forms themselves, which sit in Schedules this pipeline doesn't read (Finding 7).
