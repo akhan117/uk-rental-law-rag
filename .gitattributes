@@ -1,0 +1,6 @@
+# cmd.exe misreads labels and goto in batch files with LF-only line endings, and
+# a GitHub "Download ZIP" copy gets whatever the repo stores, so the .bat files
+# are stored with CRLF as-is. The macOS scripts must stay LF for bash.
+*.bat -text
+*.command text eol=lf
+*.sh text eol=lf

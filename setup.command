@@ -1,97 +1,125 @@
 #!/bin/bash
-# macOS equivalent of setup.bat. Double-clickable in Finder (.command files open
-# in Terminal). If macOS refuses to run it, the file needs the executable bit:
-#   chmod +x setup.command
+# One-time setup for macOS. start.command runs this automatically the first
+# time, so nobody needs to open it by hand - run it again only to switch
+# Fast/Private mode.
 cd "$(dirname "$0")" || exit 1
 
-echo "================================================================"
-echo " UK Residential Rental Law RAG - First-time setup"
-echo " (only needs to be run once)"
-echo "================================================================"
-echo
-
-PY_EXE=""
-for candidate in python3 python; do
-    if "$candidate" --version >/dev/null 2>&1; then PY_EXE="$candidate"; break; fi
-done
-
-if [ -z "$PY_EXE" ]; then
-    echo "ERROR: Python was not found on this computer."
-    echo "Please install Python 3.10 or newer from https://python.org/downloads"
-    echo "then run this file again."
+problem() {
+    echo
+    echo " --------------------------------------------------------------"
+    echo "  PROBLEM: $1"
+    echo "  $2"
+    echo " --------------------------------------------------------------"
     read -r -p "Press return to close..."
     exit 1
-fi
+}
 
-if [ ! -d venv ]; then
-    echo "Creating a private Python environment for this app..."
-    "$PY_EXE" -m venv venv || { echo "ERROR: Could not create the Python environment."; read -r -p "Press return to close..."; exit 1; }
-fi
+find_ollama() {
+    for c in "$(command -v ollama)" /usr/local/bin/ollama /opt/homebrew/bin/ollama \
+             /Applications/Ollama.app/Contents/Resources/ollama; do
+        if [ -n "$c" ] && [ -x "$c" ]; then echo "$c"; return; fi
+    done
+}
+
+ensure_ollama_running() {
+    curl -s -m 2 http://127.0.0.1:11434/api/tags >/dev/null && return
+    nohup "$OLLAMA_EXE" serve >/dev/null 2>&1 &
+    for _ in $(seq 1 30); do
+        sleep 1
+        curl -s -m 2 http://127.0.0.1:11434/api/tags >/dev/null && return
+    done
+}
 
 echo
-echo "Installing required packages (this can take a few minutes)..."
-venv/bin/python -m pip install --upgrade pip --quiet
-if ! venv/bin/python -m pip install -r requirements.txt; then
-    echo
-    echo "ERROR: Package install failed. Check your internet connection and try again."
-    read -r -p "Press return to close..."
-    exit 1
-fi
+echo " =============================================================="
+echo "  UK Rental Law Assistant - one-time setup"
+echo "  No admin password needed. Takes about 5-15 minutes."
+echo " =============================================================="
+echo
 
-if ! command -v ollama >/dev/null 2>&1 && [ ! -x /usr/local/bin/ollama ] && [ ! -x /opt/homebrew/bin/ollama ]; then
-    echo
-    echo "Ollama (the local AI model runner) was not found."
-    if command -v brew >/dev/null 2>&1; then
-        echo "Installing it with Homebrew..."
-        brew install --cask ollama
+# 1. uv: downloads its own Python and installs the packages, so there is no
+# Python to install by hand and no clash with any Python already installed.
+UV_EXE="$(command -v uv || true)"
+[ -z "$UV_EXE" ] && [ -x "$HOME/.local/bin/uv" ] && UV_EXE="$HOME/.local/bin/uv"
+if [ -z "$UV_EXE" ]; then
+    echo "[1/4] Getting the installer (uv)..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    [ -x "$HOME/.local/bin/uv" ] && UV_EXE="$HOME/.local/bin/uv"
+fi
+[ -n "$UV_EXE" ] || problem "Couldn't download the installer." \
+    "Check the internet connection, then double-click start.command again."
+
+echo
+echo "[2/4] Installing Python and the app's parts (about 1GB)..."
+if [ ! -x venv/bin/python ]; then
+    rm -rf venv
+    "$UV_EXE" venv venv --python 3.11 || problem "Couldn't install Python." \
+        "Check the internet connection, then double-click start.command again."
+fi
+"$UV_EXE" pip install --python venv/bin/python -r requirements.txt -c constraints.txt \
+    || problem "Couldn't install the app's parts." \
+        "Check the internet connection, then double-click start.command again."
+
+echo
+echo "[3/4] One question..."
+venv/bin/python scripts/setup_wizard.py
+case $? in
+    0) MODE=fast ;;
+    10) MODE=private ;;
+    *) problem "Setup was stopped before the question was answered." \
+        "Double-click start.command whenever you're ready to carry on." ;;
+esac
+
+echo
+echo "[4/4] Downloading the remaining pieces and building the search index..."
+if [ "$MODE" = private ]; then
+    OLLAMA_EXE="$(find_ollama)"
+    if [ -z "$OLLAMA_EXE" ]; then
+        echo "Installing Ollama, which runs the AI model on this computer..."
+        if command -v brew >/dev/null 2>&1; then
+            brew install --cask ollama
+        else
+            tmp="$(mktemp -d)"
+            curl -fL -o "$tmp/Ollama.zip" https://ollama.com/download/Ollama-darwin.zip \
+                && unzip -q -o "$tmp/Ollama.zip" -d /Applications
+            rm -rf "$tmp"
+        fi
+        OLLAMA_EXE="$(find_ollama)"
     fi
+    if [ -z "$OLLAMA_EXE" ]; then
+        open https://ollama.com/download
+        problem "Couldn't install Ollama automatically." \
+            "Install it from the page that just opened, then double-click start.command again."
+    fi
+    ensure_ollama_running
+    echo "Downloading the AI model (about 2.5GB)..."
+    "$OLLAMA_EXE" pull qwen3:4b || problem "A download didn't finish." \
+        "Check the internet connection, then double-click start.command again."
 fi
 
-OLLAMA_EXE="$(command -v ollama || true)"
-[ -z "$OLLAMA_EXE" ] && [ -x /usr/local/bin/ollama ] && OLLAMA_EXE=/usr/local/bin/ollama
-[ -z "$OLLAMA_EXE" ] && [ -x /opt/homebrew/bin/ollama ] && OLLAMA_EXE=/opt/homebrew/bin/ollama
-
-if [ -z "$OLLAMA_EXE" ]; then
-    echo
-    echo "Automatic install didn't work. Please install Ollama manually from"
-    echo "https://ollama.com then run this setup file again."
-    read -r -p "Press return to close..."
-    exit 1
-fi
-
-echo
-echo "Downloading the AI model (about 2.5GB, one-time only)..."
-if ! "$OLLAMA_EXE" pull qwen3:4b; then
-    echo
-    echo "ERROR: Could not download the model. Check your internet connection and try again."
-    read -r -p "Press return to close..."
-    exit 1
-fi
-
-# Fetch the embedding model now rather than during the first question. It is a
-# ~130MB download that sentence-transformers otherwise performs lazily, inside
-# the first request - which makes the first question appear to hang, and fails
-# outright on a machine that is offline by then.
-echo
-echo "Downloading the search model (about 130MB, one-time only)..."
+# Fetch the search model now rather than inside the first question, which
+# would otherwise look like a hang (~130MB).
+echo "Downloading the search model (about 130MB)..."
 venv/bin/python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')" \
-    || echo "WARNING: could not pre-download the search model; it will download on first use."
+    || problem "A download didn't finish." \
+        "Check the internet connection, then double-click start.command again."
 
-# A fresh clone has the parsed legislation (data/processed) but no search index;
-# build it once. Skipped when an index exists, so a local full build (with case
-# law) is never overwritten.
+# Build the index from the bundled legislation. Skipped when one exists, so a
+# local full build (with case law) is never overwritten.
 if [ ! -d data/chroma ]; then
-    echo
-    echo "Building the search index (one-time, about a minute)..."
-    if ! venv/bin/python ingestion/build_index.py; then
-        echo "ERROR: Could not build the search index."
-        read -r -p "Press return to close..."
-        exit 1
-    fi
+    echo "Building the search index (about a minute)..."
+    venv/bin/python ingestion/build_index.py \
+        || problem "Couldn't build the search index." "Double-click start.command to try again."
 fi
 
+touch venv/.setup-done
+# A downloaded copy carries macOS's quarantine flag, which makes every script in
+# it ask for permission again. The person has already approved this folder.
+xattr -dr com.apple.quarantine . 2>/dev/null || true
+
 echo
-echo "================================================================"
-echo " Setup complete! Double-click start.command to run the app."
-echo "================================================================"
-read -r -p "Press return to close..."
+echo " =============================================================="
+echo "  Setup finished."
+echo " =============================================================="
+[ "$1" = "--from-start" ] && exit 0
+exec bash ./start.command
