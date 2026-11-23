@@ -17,34 +17,33 @@ and eval-gated in CI.
 
 ## Running this if you're not a developer
 
-> **Cloned from GitHub?** The repo includes the parsed legislation, and setup builds the
+You don't need to install anything first, and you don't need admin rights.
+
+1. **Download it.** On this page, click the green **Code** button → **Download ZIP**, then
+   unzip it (right-click → *Extract All* on Windows; double-click on a Mac).
+2. **Double-click `start.bat`** (Windows) or **`start.command`** (Mac).
+   - Windows may say *"Windows protected your PC"*: click **More info → Run anyway**.
+   - A Mac may say it can't check the developer: **right-click** `start.command` → **Open** →
+     **Open**. This is only needed the first time.
+3. **The first time only**, it sets itself up (about 5-15 minutes) and asks one question:
+   - **Fast**: answers in seconds on any computer. It opens a page where you get a free key
+     from Groq (sign in with Google, click *Create API Key*, copy, paste). Questions go to
+     Groq's servers.
+   - **Private**: everything stays on your computer. It downloads a 2.5GB AI model, and
+     without a graphics card each answer takes up to a minute. The setup tells you which suits
+     your computer.
+
+After that, double-clicking start opens the app in about 15 seconds. To switch between Fast and
+Private later, double-click `setup.bat` / `setup.command`.
+
+The app keeps running quietly in the background after you close its window, until you
+restart the computer. Starting it again always starts a fresh copy, so an updated download or a
+changed setting takes effect straight away.
+
+> **Downloaded from GitHub?** The repo includes the parsed legislation, and setup builds the
 > search index from it. Case law is not included (see the licensing note under
 > [Known limitations](#known-limitations)). To add it, run step 1 of the
 > [developer path](#running-it-manually-developer-path).
-
-**On Windows** use `setup.bat` / `start.bat`; **on a Mac** use `setup.command` / `start.command`
-(if macOS refuses to open them, run `chmod +x setup.command start.command` once in Terminal).
-
-1. Double-click **setup**. This only needs to be done once — it installs what the app needs
-   and downloads the AI model. Budget **10-20 minutes and about 4GB** (1.2GB of Python packages,
-   2.5GB model, 130MB search model) on a reasonable connection, and more on a slow one. A window
-   will show progress; close it when it says "Setup complete."
-2. Double-click **start** any time you want to use the app. A window will open after about
-   10 seconds — that's the chat interface. Just ask a question.
-3. To stop, just close that window.
-
-If setup reports that Python is missing, install it from
-[python.org/downloads](https://python.org/downloads) (on Windows, tick "Add python.exe to PATH"
-during install) and run setup again.
-
-**Speed.** The AI model runs on your own machine, so nothing is sent to the internet — but on a
-computer without a dedicated graphics card each answer takes up to a minute instead of a few
-seconds. The app detects which it is and says so at the top of the page; the retrieved sources
-appear within a second or two while the answer is still being written. It is slow, not stuck.
-
-**If you're sent an updated copy**, close the app window *and* quit the background process (reboot
-is the simplest way) before running start again. The launcher reuses a server that is already
-running, so otherwise you can end up on the old version without realising.
 
 ## Architecture
 

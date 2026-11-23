@@ -4,6 +4,8 @@ rem needs to open it by hand - run it again only to switch Fast/Private mode.
 setlocal
 cd /d "%~dp0"
 title UK Rental Law Assistant - setup
+rem Chroma's usage telemetry fails noisily; the messages look like errors.
+set "ANONYMIZED_TELEMETRY=False"
 
 echo.
 echo  ==============================================================

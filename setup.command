@@ -3,6 +3,8 @@
 # time, so nobody needs to open it by hand - run it again only to switch
 # Fast/Private mode.
 cd "$(dirname "$0")" || exit 1
+# Chroma's usage telemetry fails noisily; the messages look like errors.
+export ANONYMIZED_TELEMETRY=False
 
 problem() {
     echo
