@@ -5,8 +5,8 @@
 A source-grounded legal information assistant for **England residential landlord-tenant law**,
 built to a separate design spec (cited in code comments as `Docs.pdf`, not included in this repo): retrieve legislation + case law, generate
 a cited answer, and abstain when the evidence doesn't support an answer. Runs fully locally on
-Qwen3 via Ollama, or against a free hosted LLM API; ships as one Docker image, is tested and
-eval-gated in CI, and deploys automatically to Hugging Face Spaces.
+Qwen3 via Ollama, or against a free hosted LLM API; ships as one Docker image, and is tested
+and eval-gated in CI.
 
 **This is a tech demo, not a production legal tool.** Legal information, not legal advice. See
 [Known limitations](#known-limitations) before trusting any specific answer.
@@ -80,10 +80,7 @@ frontend/  → static chat UI (vanilla JS), renders short answer → applicable 
 git push ──► CI ─┬─ ruff + pytest (90 tests, no model or network)
                  ├─ build index from committed corpus → retrieval eval (no LLM, deterministic)
                  │    gated against eval/baseline_retrieval.json, per question
-                 └─ docker build → smoke test the container → push to ghcr.io
-                        │ (main, green)
-                        ▼
-                 deploy.yml → Hugging Face Docker Space → wait for build → live smoke test
+                 └─ docker build → smoke test the container → push to ghcr.io (main)
 weekly / manual: eval.yml → full 62-question eval on the hosted LLM, gated with tolerance
 ```
 
@@ -155,7 +152,7 @@ the citation-constrained answer schema, verification) is identical across backen
 | `LLM_PROVIDER` | Default model | Key variable | Notes |
 |---|---|---|---|
 | `ollama` (default) | `qwen3:4b` | — | Fully local. Native API, so `think: false`, `num_predict` and `repeat_penalty` apply exactly as measured below. `RAG_MODEL` still works. |
-| `groq` | `openai/gpt-oss-20b` | `GROQ_API_KEY` | Free tier, email signup. Strict `json_schema` including the citation `enum`; tool calling. Used for the public demo. |
+| `groq` | `openai/gpt-oss-20b` | `GROQ_API_KEY` | Free tier, email signup. Strict `json_schema` including the citation `enum`; tool calling. The Docker image's default. |
 | `gemini` | `gemini-2.5-flash` | `GEMINI_API_KEY` | Free tier via Google AI Studio. OpenAI-compatible endpoint. |
 | `openrouter` | `openai/gpt-oss-20b:free` | `OPENROUTER_API_KEY` | `:free` models; low daily request cap without credits. |
 | `openai` | set `LLM_MODEL` | `LLM_API_KEY` | Any OpenAI-compatible URL (`LLM_BASE_URL`), including Ollama's own `/v1`. |
@@ -191,7 +188,7 @@ corpus from the container, mount it: `-v ./data:/app/data`.
 
 ### CI/CD
 
-Three workflows, all free on a public repo:
+Two workflows, both free on a public repo:
 
 - **`ci.yml`, every push and PR.** `ruff`; `pytest` (90 tests, all offline: the LLM is faked
   at the HTTP layer with `httpx.MockTransport`, so the real provider adapters are what's
@@ -206,29 +203,18 @@ Three workflows, all free on a public repo:
   `rag` or `agent` mode. Generation metrics carry sampling noise (see the variance note
   below), so these are gated with tolerance, as floors that catch a regression rather than
   targets that flap. It skips cleanly if no API key secret is set.
-- **`deploy.yml`, after CI passes on `main`.** It pushes the app to a Hugging Face Docker Space,
-  syncs API keys from GitHub secrets into Space *secrets*, waits for the Space to build, and
-  smoke-tests the live URL. It checks that the version on `/health` is the commit just deployed,
-  so it can't pass against the previous build that's still serving.
 
 The committed corpus is `data/processed/legislation_chunks.jsonl` (Crown copyright, Open
 Government Licence v3.0, which permits republication). Without it, CI would need the
 headless-browser fetch described in Architecture.
 
-### Deploying your own copy (Hugging Face Spaces, free)
+### Hosting it publicly
 
-1. Create a free account at huggingface.co and an access token with **write** scope.
-2. Create a free Groq API key at console.groq.com.
-3. In the GitHub repo, open **Settings → Secrets and variables → Actions** and add the secrets
-   `HF_TOKEN` and `GROQ_API_KEY` and the variable `HF_SPACE` (e.g. `your-hf-name/uk-rental-law-rag`).
-4. Push to `main`, or run the *Deploy to Hugging Face Spaces* workflow by hand. The Space is
-   created if it doesn't exist, and every later green push to `main` redeploys it.
-
-The public image enables the guards in `backend/guard.py`. Anyone can spend a public demo's
-free-tier quota, so it rate-limits per visitor (6 questions a minute), caps LLM-backed questions
-per day (300), and caches answers so the repeated example questions cost no tokens. A free CPU
-Space sleeps after a period without visitors, and the first request after that waits for it to
-wake.
+The image runs on any container host. If it is exposed to the internet, anyone can spend its
+free-tier LLM quota, so the image enables the guards in `backend/guard.py` by default: a
+per-visitor rate limit (6 questions a minute), a cap on LLM-backed questions per day (300), and
+an answer cache so repeated example questions cost no tokens. Set `RATE_LIMIT_PER_MINUTE=0` and
+`DAILY_QUERY_LIMIT=0` to turn them off (`docker-compose.yml` does, for local use).
 
 ### Observability
 
@@ -236,7 +222,7 @@ Every request produces one trace (`backend/telemetry.py`) with per-stage latency
 retrieval, rewrite, agent planning, generation, verify), LLM calls and tokens, tool calls,
 which gate fired, and whether citation verification flagged the answer. Each trace is:
 
-- **logged** as a single JSON line on stdout (visible in `docker logs` and the Space's logs);
+- **logged** as a single JSON line on stdout (visible in `docker logs` or any host's log viewer);
 - **returned** to the client as `meta` on every answer (the UI shows it under each answer);
 - **aggregated** in a rolling window served at `/metrics` (Prometheus format: request counts
   by mode and outcome, a token counter, a latency histogram, and the citation-flag ratio) and
@@ -252,7 +238,7 @@ and throughput:
 
 ```bash
 python eval/benchmark.py --url http://127.0.0.1:8000 --n 30
-python eval/benchmark.py --url https://<your-space>.hf.space --n 20 --mode agent
+python eval/benchmark.py --url http://127.0.0.1:7860 --n 20 --mode agent   # e.g. the container
 ```
 
 **Measured serving numbers, local backend** (Qwen3-4B on Ollama, RTX 3070 Laptop GPU, full
@@ -267,9 +253,8 @@ corpus; `benchmark.py --n 20` over HTTP, cache cold, cross-checked against `/met
 | tokens per answer | ~1,680 in / ~340 out, 1.0 LLM calls |
 | answers flagged by citation verification | 10% (2 of 20) |
 
-Generation is effectively all of the latency, and that is the case for the hosted backend.
-The sources event arrives in about 40ms, so the UI shows real evidence immediately. Hosted-backend
-numbers come from the same `benchmark.py` run against the deployed Space.
+Generation is effectively all of the latency. The sources event arrives in about 40ms, so the
+UI shows real evidence immediately while the answer is still being written.
 
 ## Agent mode (tool calling)
 
@@ -413,7 +398,7 @@ within the run-to-run variance described below. The same file now records latenc
 per question: p50 6.3s, p95 13.7s across all 62 items (abstentions included), ~1,540 tokens in
 and ~285 out per answered question.
 
-**Legislation-only corpus (CI, Docker, the public Space).** Without the six cases, the 6
+**Legislation-only corpus (CI and Docker).** Without the six cases, the 6
 case-law questions are skipped rather than failed, and retrieval on the remaining 24 in-scope
 questions is **20/24 (83%)**, with all 14 out-of-scope probes stopped before generation.
 That run is `eval/baseline_retrieval.json`, the baseline CI gates every push against.
@@ -781,7 +766,7 @@ generation, not to extend the wait.
   for computational use at scale. For a six-judgment demo run locally this is a paperwork gap rather
   than a live infringement risk, but it is a real precondition for anything shipped or published,
   and it is unresolved rather than overlooked. **That is why everything published - the git
-  repo, the Docker image and the public Space - carries legislation only** (Open Government
+  repo and the Docker image - carries legislation only** (Open Government
   Licence), and the six cases stay in local builds. Case-law questions are reported as skipped,
   not failed, when the corpus doesn't hold them; adding the licence and the cases is a data
   change, not a code change.

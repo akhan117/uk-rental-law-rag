@@ -313,7 +313,7 @@ def run_query(req: QueryRequest, trace: Trace | None = None) -> Iterator[tuple[s
 # --------------------------------------------------------------------------- serving
 
 def _client_id(request: Request) -> str:
-    # Behind the HF Spaces proxy the socket peer is the proxy; the visitor is the
+    # Behind a reverse proxy the socket peer is the proxy; the visitor is the
     # first X-Forwarded-For entry.
     fwd = request.headers.get("x-forwarded-for", "")
     return fwd.split(",")[0].strip() or (request.client.host if request.client else "unknown")

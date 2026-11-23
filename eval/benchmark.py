@@ -2,11 +2,11 @@
 tokens and estimated cost per query.
 
 The eval measures answer quality offline; this measures serving, end to end,
-against a real URL - the local server, a container, or the live Space - over
+against a real URL - the local server, a container, or a hosted copy - over
 the same HTTP path a browser uses (POST /query/stream).
 
     python eval/benchmark.py --url http://127.0.0.1:8000 --n 30
-    python eval/benchmark.py --url https://<space>.hf.space --n 20 --concurrency 2 --mode agent
+    python eval/benchmark.py --url http://127.0.0.1:7860 --n 20 --concurrency 2 --mode agent
 
 Questions are drawn from the gold set (in-scope + must-answer: the ones that
 reach generation). Run the server with ANSWER_CACHE_SIZE=0 for honest numbers;

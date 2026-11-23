@@ -33,7 +33,7 @@ COPY requirements.txt constraints.txt ./
 RUN pip install -r requirements.txt -c constraints.txt
 
 # Bake the embedding model into the image so a container start never downloads
-# it - cold starts on a free Space are already the slowest moment for a visitor.
+# it - a cold start is already the slowest moment for a visitor.
 RUN python -c "from sentence_transformers import SentenceTransformer; \
 SentenceTransformer('BAAI/bge-small-en-v1.5')"
 
@@ -47,13 +47,13 @@ RUN python ingestion/build_index.py
 COPY frontend/ frontend/
 COPY eval/ eval/
 
-# Hugging Face Spaces runs containers as uid 1000, and Chroma opens its SQLite
-# file read-write even for queries.
+# Run as an unprivileged user that owns /app: Chroma opens its SQLite file
+# read-write even for queries.
 RUN useradd --create-home --uid 1000 app && chown -R app:app /app
 USER app
 
-# Public-demo defaults; override with -e for local use. The API key is never
-# baked in - pass it at run time (or as a Space secret).
+# Public-hosting defaults; override with -e for local use. The API key is never
+# baked in - pass it at run time (or as the host's secret).
 ENV LLM_PROVIDER=groq \
     RATE_LIMIT_PER_MINUTE=6 \
     DAILY_QUERY_LIMIT=300 \
@@ -64,6 +64,6 @@ EXPOSE 7860
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '7860') + '/health', timeout=4)"
 
-# --proxy-headers: behind the Spaces proxy, so the client address used for rate
-# limiting is the visitor's, not the proxy's.
+# --proxy-headers: behind a host's reverse proxy, the client address used for
+# rate limiting is the visitor's, not the proxy's.
 CMD ["sh", "-c", "cd backend && exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-7860} --proxy-headers --forwarded-allow-ips='*'"]

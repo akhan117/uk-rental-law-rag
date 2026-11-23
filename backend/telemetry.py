@@ -3,8 +3,8 @@
 The offline eval says how good an answer is; this says what serving it cost:
 latency per pipeline stage, LLM tokens, which gate fired, and - the metric that
 mirrors the eval online - how often post-generation citation verification flagged
-an answer. Each request produces one Trace, logged as a single JSON line (HF
-Spaces and `docker logs` both capture stdout) and folded into an in-memory
+an answer. Each request produces one Trace, logged as a single JSON line
+(`docker logs` and container hosts capture stdout) and folded into an in-memory
 window that /metrics (Prometheus text) and /metrics/summary (JSON) read.
 
 The trace is passed explicitly rather than held in a contextvar. The streaming
