@@ -76,7 +76,7 @@ frontend/  → static chat UI (vanilla JS), renders short answer → applicable 
 ```
 
 ```
-git push ──► CI ─┬─ ruff + pytest (90 tests, no model or network)
+git push ──► CI ─┬─ ruff + pytest (100 tests, no model or network)
                  ├─ build index from committed corpus → retrieval eval (no LLM, deterministic)
                  │    gated against eval/baseline_retrieval.json, per question
                  └─ docker build → smoke test the container → push to ghcr.io (main)
@@ -138,7 +138,7 @@ python run_eval.py --retrieval-only   # recall + gates only: no LLM, determinist
 python run_eval.py --mode agent       # same benchmark, agent-planned retrieval
 python compare_models.py      # side-by-side table of every recorded run
 cd ..
-pip install -r requirements-dev.txt && pytest   # 90 unit/API tests, no model needed
+pip install -r requirements-dev.txt && pytest   # 100 unit/API tests, no model needed
 ```
 
 ## Deployment and operations
@@ -189,7 +189,7 @@ corpus from the container, mount it: `-v ./data:/app/data`.
 
 Two workflows, both free on a public repo:
 
-- **`ci.yml`, every push and PR.** `ruff`; `pytest` (90 tests, all offline: the LLM is faked
+- **`ci.yml`, every push and PR.** `ruff`; `pytest` (100 tests, all offline: the LLM is faked
   at the HTTP layer with `httpx.MockTransport`, so the real provider adapters are what's
   tested); then it builds the index from the committed corpus and runs the **retrieval eval
   with no LLM at all**. That eval is deterministic (README Finding 5: zero in-scope questions
